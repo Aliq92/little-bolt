@@ -1,0 +1,23 @@
+{
+  "name": "little-bolt",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A mobile-first 2D platformer built with Phaser, TypeScript and Vite.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
