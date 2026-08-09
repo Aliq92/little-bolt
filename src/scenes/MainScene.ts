@@ -2,9 +2,12 @@ import Phaser from 'phaser';
 
 import { GAME_HEIGHT, GAME_WIDTH } from '../config/constants';
 import { Player } from '../entities/player/Player';
+import type { DisplayState } from '../systems/MobileDisplayController';
+import { MobileDisplayController } from '../systems/MobileDisplayController';
 import { InputController } from '../systems/InputController';
+import { MobilePlayOverlay } from '../ui/MobilePlayOverlay';
 
-const VERSION_LABEL = 'Little Bolt v0.1.0';
+const VERSION_LABEL = 'Little Bolt v0.1.1';
 
 const BACKGROUND_COLOR = 0x101827;
 const FLOOR_COLOR = 0x2b3346;
@@ -41,6 +44,12 @@ const FALL_RESET_Y = GAME_HEIGHT + 80;
 export class MainScene extends Phaser.Scene {
   private player!: Player;
   private inputController!: InputController;
+  private displayController?: MobileDisplayController;
+  private overlay?: MobilePlayOverlay;
+
+  /** True once gameplay is allowed to run: immediately on desktop, after the play tap on touch devices. */
+  private hasStarted = true;
+  private isPausedForOrientation = false;
 
   public constructor() {
     super('MainScene');
@@ -59,6 +68,7 @@ export class MainScene extends Phaser.Scene {
     this.inputController = new InputController(this);
 
     this.createVersionLabel();
+    this.setupMobileDisplay();
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.handleShutdown, this);
     this.events.once(Phaser.Scenes.Events.DESTROY, this.handleShutdown, this);
@@ -106,7 +116,116 @@ export class MainScene extends Phaser.Scene {
       .setDepth(500);
   }
 
+  /**
+   * Sets up the touch-device play flow (start overlay, orientation pause, fullscreen
+   * re-entry). Never lets a failure here block normal browser gameplay.
+   */
+  private setupMobileDisplay(): void {
+    try {
+      const container = document.getElementById('game');
+      if (!container) {
+        throw new Error('Game container element (#game) was not found.');
+      }
+
+      this.displayController = new MobileDisplayController({
+        container,
+        game: this.game,
+        onChange: (state) => this.handleDisplayChange(state),
+      });
+      this.overlay = new MobilePlayOverlay({
+        container,
+        onPlayFullscreen: () => void this.handleStartTap(),
+        onFullscreenReentry: () => void this.handleFullscreenReentry(),
+      });
+
+      const initialState = this.displayController.getState();
+      if (initialState.isTouchDevice) {
+        this.hasStarted = false;
+        this.pauseForOrientation();
+        this.overlay.showStartOverlay();
+      }
+    } catch (error) {
+      console.error('Little Bolt: mobile display setup failed; falling back to normal browser gameplay.', error);
+      this.displayController?.destroy();
+      this.overlay?.destroy();
+      this.displayController = undefined;
+      this.overlay = undefined;
+      if (this.isPausedForOrientation) {
+        this.resumeFromOrientation();
+      }
+      this.hasStarted = true;
+    }
+  }
+
+  /** Runs from the PLAY FULLSCREEN tap's own gesture — fullscreen/orientation lock must happen here. */
+  private async handleStartTap(): Promise<void> {
+    this.overlay?.hideStartOverlay();
+
+    const fullscreenGranted = await this.displayController?.requestFullscreen();
+    if (fullscreenGranted) {
+      await this.displayController?.requestLandscapeLock();
+    }
+
+    this.hasStarted = true;
+    if (this.displayController) {
+      this.handleDisplayChange(this.displayController.getState());
+    }
+  }
+
+  /** Runs from the fullscreen re-entry button's own tap gesture. */
+  private async handleFullscreenReentry(): Promise<void> {
+    await this.displayController?.requestFullscreen();
+  }
+
+  private handleDisplayChange(state: DisplayState): void {
+    this.inputController.repositionControls();
+
+    if (!this.hasStarted) {
+      return;
+    }
+
+    const shouldPauseForOrientation = state.isTouchDevice && state.isPortrait;
+
+    // pauseForOrientation()/resumeFromOrientation() are internally idempotent, so it's
+    // safe to call them on every display change — this keeps overlay visibility and
+    // pause state in sync even when the game started already paused for the start overlay.
+    if (shouldPauseForOrientation) {
+      this.pauseForOrientation();
+      this.overlay?.showRotateOverlay();
+    } else {
+      this.overlay?.hideRotateOverlay();
+      this.resumeFromOrientation();
+    }
+
+    const showReentry = state.isTouchDevice && !state.isFullscreen && !shouldPauseForOrientation;
+    if (showReentry) {
+      this.overlay?.showFullscreenReentry();
+    } else {
+      this.overlay?.hideFullscreenReentry();
+    }
+  }
+
+  private pauseForOrientation(): void {
+    if (this.isPausedForOrientation) {
+      return;
+    }
+    this.isPausedForOrientation = true;
+    this.physics.world.pause();
+    this.inputController.setEnabled(false);
+  }
+
+  private resumeFromOrientation(): void {
+    if (!this.isPausedForOrientation) {
+      return;
+    }
+    this.isPausedForOrientation = false;
+    this.physics.world.resume();
+    this.inputController.setEnabled(true);
+  }
+
   private handleShutdown(): void {
     this.inputController?.destroy();
+    this.displayController?.destroy();
+    this.overlay?.destroy();
   }
 }

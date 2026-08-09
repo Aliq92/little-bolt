@@ -24,13 +24,96 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  width: 100vw;
+  width: 100dvw;
   min-height: 100vh;
   min-height: 100dvh;
   touch-action: none;
+  background: #101827;
+}
+
+#game:fullscreen,
+#game:-webkit-full-screen {
+  width: 100vw;
+  width: 100dvw;
+  height: 100vh;
+  height: 100dvh;
 }
 
 #game canvas {
   display: block;
   max-width: 100%;
   max-height: 100%;
+}
+
+.lb-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  background: rgba(16, 24, 39, 0.94);
+  color: #e8fbff;
+  text-align: center;
+  z-index: 2000;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.lb-overlay.lb-hidden {
+  display: none;
+}
+
+.lb-overlay__title {
+  margin: 0;
+  font-size: clamp(20px, 6vw, 32px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.lb-overlay__subtitle {
+  margin: 0;
+  font-size: clamp(14px, 3.6vw, 18px);
+  color: #9fb2d6;
+}
+
+.lb-play-button {
+  margin-top: 8px;
+  padding: 16px 32px;
+  border: none;
+  border-radius: 999px;
+  background: #22e2f5;
+  color: #101827;
+  font-size: clamp(16px, 4vw, 20px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.lb-play-button:active {
+  background: #6bf0fc;
+}
+
+.lb-reentry-button {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  padding: 8px 14px;
+  border: 1px solid rgba(34, 226, 245, 0.6);
+  border-radius: 999px;
+  background: rgba(28, 35, 51, 0.75);
+  color: #e8fbff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 1500;
+  touch-action: manipulation;
+}
+
+.lb-reentry-button.lb-hidden {
+  display: none;
 }

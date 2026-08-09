@@ -6,20 +6,30 @@ export interface PlayerInputState {
   jumpPressed: boolean;
 }
 
-const BUTTON_RADIUS = 32;
-const BUTTON_MARGIN_X = 44;
-const BUTTON_MARGIN_Y = 48;
-const BUTTON_GAP_X = 70;
+const MOVE_BUTTON_RADIUS = 42; // ~84px logical diameter
+const JUMP_BUTTON_RADIUS = 46; // ~92px logical diameter
+
+const CONTROL_MARGIN_X = 64;
+const CONTROL_MARGIN_Y = 56;
+const MOVE_BUTTON_GAP_X = 116;
+
 const BUTTON_FILL_COLOR = 0x1c2333;
 const BUTTON_STROKE_COLOR = 0x22e2f5;
-const BUTTON_ALPHA_IDLE = 0.28;
-const BUTTON_ALPHA_ACTIVE = 0.55;
+const BUTTON_ALPHA_IDLE = 0.22;
+const BUTTON_ALPHA_ACTIVE = 0.5;
+const BUTTON_STROKE_ALPHA_IDLE = 0.5;
+const BUTTON_STROKE_ALPHA_ACTIVE = 1;
+const BUTTON_STROKE_WIDTH = 2;
+const BUTTON_PRESSED_SCALE = 1.08;
 const BUTTON_LABEL_COLOR = '#e8fbff';
 const BUTTON_DEPTH = 1000;
+
+type ButtonId = 'left' | 'right' | 'jump';
 
 interface TouchButton {
   circle: Phaser.GameObjects.Arc;
   label: Phaser.GameObjects.Text;
+  radius: number;
   pressed: boolean;
 }
 
@@ -43,6 +53,7 @@ export class InputController {
   private touchJump?: TouchButton;
 
   private wasJumpHeld = false;
+  private enabled = true;
 
   private readonly handleBlur = (): void => this.clearAllInput();
   private readonly handleVisibilityChange = (): void => {
@@ -50,6 +61,7 @@ export class InputController {
       this.clearAllInput();
     }
   };
+  private readonly handleScaleResize = (): void => this.repositionControls();
 
   public constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -59,6 +71,10 @@ export class InputController {
   }
 
   public getState(): PlayerInputState {
+    if (!this.enabled) {
+      return { left: false, right: false, jumpPressed: false };
+    }
+
     const left = Boolean(this.keyLeftA?.isDown || this.keyLeftArrow?.isDown || this.touchLeft?.pressed);
     const right = Boolean(this.keyRightD?.isDown || this.keyRightArrow?.isDown || this.touchRight?.pressed);
     const jumpHeld = Boolean(
@@ -74,9 +90,56 @@ export class InputController {
     return { left, right, jumpPressed };
   }
 
+  /** Disabling clears all held input and returns buttons to their idle appearance. */
+  public setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) {
+      return;
+    }
+    this.enabled = enabled;
+    if (!enabled) {
+      this.clearAllInput();
+    }
+  }
+
+  public clearAllInput(): void {
+    for (const button of [this.touchLeft, this.touchRight, this.touchJump]) {
+      this.setButtonIdle(button);
+    }
+
+    for (const key of [
+      this.keyLeftA,
+      this.keyLeftArrow,
+      this.keyRightD,
+      this.keyRightArrow,
+      this.keyJumpW,
+      this.keyJumpUp,
+      this.keyJumpSpace,
+    ]) {
+      key?.reset();
+    }
+
+    this.wasJumpHeld = false;
+  }
+
+  /** Repositions existing touch buttons in place; never recreates them. */
+  public repositionControls(): void {
+    const { width, height } = this.scene.cameras.main;
+
+    const leftX = CONTROL_MARGIN_X + MOVE_BUTTON_RADIUS;
+    const moveY = height - CONTROL_MARGIN_Y - MOVE_BUTTON_RADIUS;
+    const rightX = leftX + MOVE_BUTTON_GAP_X;
+    const jumpX = width - CONTROL_MARGIN_X - JUMP_BUTTON_RADIUS;
+    const jumpY = height - CONTROL_MARGIN_Y - JUMP_BUTTON_RADIUS;
+
+    this.positionButton(this.touchLeft, leftX, moveY);
+    this.positionButton(this.touchRight, rightX, moveY);
+    this.positionButton(this.touchJump, jumpX, jumpY);
+  }
+
   public destroy(): void {
     this.scene.game.events.off(Phaser.Core.Events.BLUR, this.handleBlur);
     this.scene.input.off(Phaser.Input.Events.GAME_OUT, this.handleBlur);
+    this.scene.scale.off(Phaser.Scale.Events.RESIZE, this.handleScaleResize);
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     }
@@ -104,31 +167,26 @@ export class InputController {
   }
 
   private setupTouchControls(): void {
-    const { width, height } = this.scene.cameras.main;
+    this.touchLeft = this.createButton('left', MOVE_BUTTON_RADIUS, '←');
+    this.touchRight = this.createButton('right', MOVE_BUTTON_RADIUS, '→');
+    this.touchJump = this.createButton('jump', JUMP_BUTTON_RADIUS, '↑');
 
-    this.touchLeft = this.createButton(BUTTON_MARGIN_X, height - BUTTON_MARGIN_Y, '←');
-    this.touchRight = this.createButton(
-      BUTTON_MARGIN_X + BUTTON_GAP_X,
-      height - BUTTON_MARGIN_Y,
-      '→',
-    );
-    this.touchJump = this.createButton(width - BUTTON_MARGIN_X, height - BUTTON_MARGIN_Y, '↑');
+    this.repositionControls();
+    this.scene.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize);
   }
 
-  private createButton(x: number, y: number, symbol: string): TouchButton {
-    const circle = this.scene.add.circle(x, y, BUTTON_RADIUS, BUTTON_FILL_COLOR, BUTTON_ALPHA_IDLE);
-    circle.setStrokeStyle(2, BUTTON_STROKE_COLOR, 0.6);
+  private createButton(id: ButtonId, radius: number, symbol: string): TouchButton {
+    const circle = this.scene.add.circle(0, 0, radius, BUTTON_FILL_COLOR, BUTTON_ALPHA_IDLE);
+    circle.setStrokeStyle(BUTTON_STROKE_WIDTH, BUTTON_STROKE_COLOR, BUTTON_STROKE_ALPHA_IDLE);
     circle.setScrollFactor(0);
     circle.setDepth(BUTTON_DEPTH);
+    circle.setName(`touch-${id}`);
     // Phaser normalizes hit-test coordinates by the object's display origin before
     // testing, so a circular hit area must be centered at (radius, radius), not (0, 0).
-    circle.setInteractive(
-      new Phaser.Geom.Circle(BUTTON_RADIUS, BUTTON_RADIUS, BUTTON_RADIUS),
-      Phaser.Geom.Circle.Contains,
-    );
+    circle.setInteractive(new Phaser.Geom.Circle(radius, radius, radius), Phaser.Geom.Circle.Contains);
 
     const label = this.scene.add
-      .text(x, y, symbol, {
+      .text(0, 0, symbol, {
         color: BUTTON_LABEL_COLOR,
         fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         fontSize: '28px',
@@ -138,17 +196,19 @@ export class InputController {
       .setScrollFactor(0)
       .setDepth(BUTTON_DEPTH + 1);
 
-    const button: TouchButton = { circle, label, pressed: false };
+    const button: TouchButton = { circle, label, radius, pressed: false };
 
     const press = (): void => {
+      if (!this.enabled) {
+        return;
+      }
       button.pressed = true;
       circle.setFillStyle(BUTTON_FILL_COLOR, BUTTON_ALPHA_ACTIVE);
+      circle.setStrokeStyle(BUTTON_STROKE_WIDTH, BUTTON_STROKE_COLOR, BUTTON_STROKE_ALPHA_ACTIVE);
+      circle.setScale(BUTTON_PRESSED_SCALE);
     };
 
-    const release = (): void => {
-      button.pressed = false;
-      circle.setFillStyle(BUTTON_FILL_COLOR, BUTTON_ALPHA_IDLE);
-    };
+    const release = (): void => this.setButtonIdle(button);
 
     circle.on(Phaser.Input.Events.POINTER_DOWN, press);
     circle.on(Phaser.Input.Events.POINTER_UP, release);
@@ -158,35 +218,29 @@ export class InputController {
     return button;
   }
 
+  private positionButton(button: TouchButton | undefined, x: number, y: number): void {
+    if (!button) {
+      return;
+    }
+    button.circle.setPosition(x, y);
+    button.label.setPosition(x, y);
+  }
+
+  private setButtonIdle(button: TouchButton | undefined): void {
+    if (!button) {
+      return;
+    }
+    button.pressed = false;
+    button.circle.setFillStyle(BUTTON_FILL_COLOR, BUTTON_ALPHA_IDLE);
+    button.circle.setStrokeStyle(BUTTON_STROKE_WIDTH, BUTTON_STROKE_COLOR, BUTTON_STROKE_ALPHA_IDLE);
+    button.circle.setScale(1);
+  }
+
   private setupFocusHandling(): void {
     this.scene.game.events.on(Phaser.Core.Events.BLUR, this.handleBlur);
     this.scene.input.on(Phaser.Input.Events.GAME_OUT, this.handleBlur);
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.handleVisibilityChange);
     }
-  }
-
-  private clearAllInput(): void {
-    for (const button of [this.touchLeft, this.touchRight, this.touchJump]) {
-      if (!button) {
-        continue;
-      }
-      button.pressed = false;
-      button.circle.setFillStyle(BUTTON_FILL_COLOR, BUTTON_ALPHA_IDLE);
-    }
-
-    for (const key of [
-      this.keyLeftA,
-      this.keyLeftArrow,
-      this.keyRightD,
-      this.keyRightArrow,
-      this.keyJumpW,
-      this.keyJumpUp,
-      this.keyJumpSpace,
-    ]) {
-      key?.reset();
-    }
-
-    this.wasJumpHeld = false;
   }
 }
