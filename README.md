@@ -3,13 +3,23 @@
 Little Bolt is a mobile-first 2D browser platformer built with Phaser, TypeScript, and Vite. Desktop browsers are supported too.
 
 **Status:** Playable Prototype
-**Version:** v0.1.1 — Mobile Playability
+**Version:** v0.2.0 — First Objective
 
 Play it live: **[aliq92.github.io/little-bolt](https://aliq92.github.io/little-bolt/)**
 
-This version adds a one-screen movement playground: Little Bolt, a tiny yellow repair robot, can walk, jump, and land on a floor and three platforms. There are intentionally no enemies, hazards, health, score, timers, collectibles, repair mechanics, or a finish objective yet — this milestone is movement only.
+This version turns the one-screen movement playground into one tiny, complete objective: Little Bolt, a tiny yellow repair robot, walks and jumps across a floor and three platforms to reach a glowing charging station. There are intentionally no enemies, hazards, health, score, timers, collectibles, or repair mechanics beyond that single objective — this milestone is one small win condition, nothing more.
 
-v0.1.1 adds no new gameplay. It only improves how the existing movement playground plays on phones: mobile fullscreen entry, landscape play, and larger touch controls.
+## The objective
+
+When gameplay starts, a HUD message reads **"Objective: Reach the charging station."** A glowing charging station sits on the rightmost platform — reachable with Little Bolt's existing walk and jump. Touching it:
+
+1. Completes the objective (once — repeated contact does nothing further).
+2. Stops and disables movement input.
+3. Shows a centered **"POWER RESTORED" / "Objective complete"** overlay with a **PLAY AGAIN** button.
+
+Tapping **PLAY AGAIN** cleanly restarts the scene — Little Bolt, the charging station, the touch controls, physics, and the objective state all return to their initial state.
+
+v0.2.0 adds no gameplay beyond this single objective — no enemies, hazards, collectibles, multiple objectives/levels, checkpoints, or audio.
 
 ## Controls
 
@@ -21,13 +31,15 @@ v0.1.1 adds no new gameplay. It only improves how the existing movement playgrou
 | Move right | `D` or `Right Arrow` |
 | Jump | `W`, `Up Arrow`, or `Space` |
 
-Jump only works while Little Bolt is grounded, and holding the jump key does not cause repeated jumps. Desktop keyboard controls are unaffected by v0.1.1 and remain fully supported.
+Jump only works while Little Bolt is grounded, and holding the jump key does not cause repeated jumps. Desktop keyboard controls are unchanged in v0.2.0 and remain fully supported.
 
 **Touch (mobile)**
 
 Larger, ergonomic move buttons (left/right, ~84px) sit in the bottom-left corner, and a bigger jump button (~92px) sits in the bottom-right corner, all with wide safe margins from the screen edges. All three support multi-touch — you can hold a move button with one finger and tap jump with another. Buttons are translucent so Little Bolt stays visible underneath them, and press feedback (brighter outline, deeper fill, slight scale) confirms every tap.
 
-## Mobile play flow (v0.1.1)
+Reaching the charging station disables movement input until you tap **PLAY AGAIN**; the completion overlay's button is sized and positioned the same touch-friendly way as the rest of the mobile UI.
+
+## Mobile play flow
 
 On touch-capable devices (detected via coarse-pointer/touch-point feature detection, not user-agent sniffing), a start overlay appears before gameplay begins:
 
@@ -39,15 +51,17 @@ Tapping **PLAY FULLSCREEN** uses that same tap gesture to request fullscreen on 
 - **Portrait pause:** on a touch device, turning to portrait pauses physics and input (Little Bolt's position is preserved, the page never reloads) and shows the rotate message; turning back to landscape resumes exactly where you left off.
 - **Fullscreen re-entry:** if fullscreen is exited while still in landscape, gameplay continues in the normal browser view and a small re-entry button appears so you can tap back into fullscreen; the button always requires a fresh tap and hides again once fullscreen is active.
 - **Desktop is unaffected:** desktop browsers never see the mobile overlay, are never forced into fullscreen, and never call orientation APIs.
+- **Portrait guard stays authoritative during completion:** if you rotate to portrait while the "POWER RESTORED" overlay is showing, the rotate overlay takes over exactly as it does mid-run — physics and input stay suspended, and rotating back to landscape restores the completion overlay so PLAY AGAIN is reachable again.
 
-## Gameplay scope (v0.1.0, unchanged in v0.1.1)
+## Gameplay scope (v0.2.0)
 
 - Move left and right
 - Jump only while grounded, with no double jump
 - Land on the floor and three platforms at different heights
 - Falling below the playground resets Little Bolt to the spawn point
+- Reach the glowing charging station on the rightmost platform to complete the one objective, then replay via PLAY AGAIN
 
-This is a movement playground, not a level — there is no win condition. v0.1.1 is a mobile-playability patch only; it adds no objectives, hazards, enemies, collectibles, audio, or new player abilities.
+This is still a small, one-screen playground — just with a single win condition added on top of the v0.1.x movement. v0.2.0 adds no enemies, hazards, health, collectibles, inventory, combat, additional objectives, multiple levels, checkpoints, audio, or new player abilities.
 
 ## Technology stack
 
@@ -77,6 +91,7 @@ little-bolt/
 │   ├── entities/
 │   │   ├── enemies/
 │   │   ├── objects/
+│   │   │   └── ChargingStation.ts
 │   │   └── player/
 │   │       └── Player.ts
 │   ├── scenes/
@@ -84,8 +99,10 @@ little-bolt/
 │   │   └── MainScene.ts
 │   ├── systems/
 │   │   ├── InputController.ts
-│   │   └── MobileDisplayController.ts
+│   │   ├── MobileDisplayController.ts
+│   │   └── ObjectiveSystem.ts
 │   ├── ui/
+│   │   ├── CompletionOverlay.ts
 │   │   └── MobilePlayOverlay.ts
 │   ├── utils/
 │   ├── main.ts

@@ -67,6 +67,12 @@ body {
   display: none;
 }
 
+/* Always wins over the completion overlay so the portrait guard stays authoritative
+   even after the objective is complete — see MainScene.handleDisplayChange. */
+.lb-rotate-overlay {
+  z-index: 2100;
+}
+
 .lb-overlay__title {
   margin: 0;
   font-size: clamp(20px, 6vw, 32px);
