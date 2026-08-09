@@ -1,13 +1,16 @@
 import Phaser from 'phaser';
 
 import { GAME_HEIGHT, GAME_WIDTH } from '../config/constants';
+import { ChargingStation, STATION_HEIGHT } from '../entities/objects/ChargingStation';
 import { Player } from '../entities/player/Player';
 import type { DisplayState } from '../systems/MobileDisplayController';
 import { MobileDisplayController } from '../systems/MobileDisplayController';
 import { InputController } from '../systems/InputController';
+import { ObjectiveSystem } from '../systems/ObjectiveSystem';
+import { CompletionOverlay } from '../ui/CompletionOverlay';
 import { MobilePlayOverlay } from '../ui/MobilePlayOverlay';
 
-const VERSION_LABEL = 'Little Bolt v0.1.1';
+const VERSION_LABEL = 'Little Bolt v0.2.0';
 
 const BACKGROUND_COLOR = 0x101827;
 const FLOOR_COLOR = 0x2b3346;
@@ -33,7 +36,7 @@ interface PlatformSpec {
 const PLATFORMS: PlatformSpec[] = [
   { x: 280, y: 432 }, // left-middle, low platform
   { x: 480, y: 352 }, // center, higher platform
-  { x: 740, y: 452 }, // right platform
+  { x: 740, y: 452 }, // right platform — the objective's destination
 ];
 
 /** Extra invisible world space below the floor, so a fall-through has room to register. */
@@ -41,21 +44,35 @@ const WORLD_FALL_MARGIN = 200;
 /** Y position past which Little Bolt is considered fallen and gets reset. */
 const FALL_RESET_Y = GAME_HEIGHT + 80;
 
+/** The charging station sits centered on top of the rightmost (final) platform. */
+const STATION_PLATFORM = PLATFORMS[2];
+const STATION_X = STATION_PLATFORM.x;
+const STATION_Y = STATION_PLATFORM.y - PLATFORM_HEIGHT / 2 - STATION_HEIGHT / 2;
+
 export class MainScene extends Phaser.Scene {
   private player!: Player;
+  private station!: ChargingStation;
   private inputController!: InputController;
+  private objectiveSystem!: ObjectiveSystem;
   private displayController?: MobileDisplayController;
   private overlay?: MobilePlayOverlay;
+  private completionOverlay?: CompletionOverlay;
 
   /** True once gameplay is allowed to run: immediately on desktop, after the play tap on touch devices. */
   private hasStarted = true;
-  private isPausedForOrientation = false;
+  /** True while physics/input are suspended, for either orientation or objective completion. */
+  private isSuspended = false;
+  private objectiveCompleted = false;
 
   public constructor() {
     super('MainScene');
   }
 
   public create(): void {
+    this.hasStarted = true;
+    this.isSuspended = false;
+    this.objectiveCompleted = false;
+
     this.physics.world.setBounds(0, 0, GAME_WIDTH, GAME_HEIGHT + WORLD_FALL_MARGIN);
     this.physics.world.setBoundsCollision(true, true, true, false);
 
@@ -65,10 +82,15 @@ export class MainScene extends Phaser.Scene {
     this.player = new Player(this);
     this.physics.add.collider(this.player, surfaces);
 
+    this.station = new ChargingStation(this, STATION_X, STATION_Y);
+
     this.inputController = new InputController(this);
 
     this.createVersionLabel();
-    this.setupMobileDisplay();
+
+    const container = document.getElementById('game');
+    this.setupObjective(container);
+    this.setupMobileDisplay(container);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.handleShutdown, this);
     this.events.once(Phaser.Scenes.Events.DESTROY, this.handleShutdown, this);
@@ -116,13 +138,47 @@ export class MainScene extends Phaser.Scene {
       .setDepth(500);
   }
 
+  /** Wires the objective label, the player/station overlap trigger, and the completion overlay. */
+  private setupObjective(container: HTMLElement | null): void {
+    this.objectiveSystem = new ObjectiveSystem({
+      scene: this,
+      player: this.player,
+      station: this.station,
+      onComplete: () => this.handleObjectiveComplete(),
+    });
+
+    try {
+      if (!container) {
+        throw new Error('Game container element (#game) was not found.');
+      }
+      this.completionOverlay = new CompletionOverlay({
+        container,
+        onPlayAgain: () => this.handlePlayAgain(),
+      });
+    } catch (error) {
+      console.error('Little Bolt: completion overlay setup failed.', error);
+      this.completionOverlay = undefined;
+    }
+  }
+
+  private handleObjectiveComplete(): void {
+    this.objectiveCompleted = true;
+    this.applySuspendedState(true);
+    this.completionOverlay?.show();
+  }
+
+  /** Runs from the PLAY AGAIN tap — a clean scene restart resets player, station, controls, physics, and objective state together. */
+  private handlePlayAgain(): void {
+    this.completionOverlay?.hide();
+    this.scene.restart();
+  }
+
   /**
    * Sets up the touch-device play flow (start overlay, orientation pause, fullscreen
    * re-entry). Never lets a failure here block normal browser gameplay.
    */
-  private setupMobileDisplay(): void {
+  private setupMobileDisplay(container: HTMLElement | null): void {
     try {
-      const container = document.getElementById('game');
       if (!container) {
         throw new Error('Game container element (#game) was not found.');
       }
@@ -141,7 +197,7 @@ export class MainScene extends Phaser.Scene {
       const initialState = this.displayController.getState();
       if (initialState.isTouchDevice) {
         this.hasStarted = false;
-        this.pauseForOrientation();
+        this.applySuspendedState(true);
         this.overlay.showStartOverlay();
       }
     } catch (error) {
@@ -150,8 +206,8 @@ export class MainScene extends Phaser.Scene {
       this.overlay?.destroy();
       this.displayController = undefined;
       this.overlay = undefined;
-      if (this.isPausedForOrientation) {
-        this.resumeFromOrientation();
+      if (this.isSuspended) {
+        this.applySuspendedState(false);
       }
       this.hasStarted = true;
     }
@@ -186,15 +242,15 @@ export class MainScene extends Phaser.Scene {
 
     const shouldPauseForOrientation = state.isTouchDevice && state.isPortrait;
 
-    // pauseForOrientation()/resumeFromOrientation() are internally idempotent, so it's
-    // safe to call them on every display change — this keeps overlay visibility and
-    // pause state in sync even when the game started already paused for the start overlay.
+    // The portrait guard stays authoritative even after the objective completes: physics/input
+    // remain suspended either way, and the rotate overlay renders above the completion overlay
+    // (see .lb-rotate-overlay's z-index) so landscape always reveals a valid completion state.
+    this.applySuspendedState(this.objectiveCompleted || shouldPauseForOrientation);
+
     if (shouldPauseForOrientation) {
-      this.pauseForOrientation();
       this.overlay?.showRotateOverlay();
     } else {
       this.overlay?.hideRotateOverlay();
-      this.resumeFromOrientation();
     }
 
     const showReentry = state.isTouchDevice && !state.isFullscreen && !shouldPauseForOrientation;
@@ -205,27 +261,26 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  private pauseForOrientation(): void {
-    if (this.isPausedForOrientation) {
+  /** Single idempotent chokepoint for pausing/resuming physics + input, whatever the reason. */
+  private applySuspendedState(shouldSuspend: boolean): void {
+    if (shouldSuspend === this.isSuspended) {
       return;
     }
-    this.isPausedForOrientation = true;
-    this.physics.world.pause();
-    this.inputController.setEnabled(false);
-  }
-
-  private resumeFromOrientation(): void {
-    if (!this.isPausedForOrientation) {
-      return;
+    this.isSuspended = shouldSuspend;
+    if (shouldSuspend) {
+      this.physics.world.pause();
+      this.inputController.setEnabled(false);
+    } else {
+      this.physics.world.resume();
+      this.inputController.setEnabled(true);
     }
-    this.isPausedForOrientation = false;
-    this.physics.world.resume();
-    this.inputController.setEnabled(true);
   }
 
   private handleShutdown(): void {
     this.inputController?.destroy();
     this.displayController?.destroy();
     this.overlay?.destroy();
+    this.objectiveSystem?.destroy();
+    this.completionOverlay?.destroy();
   }
 }
