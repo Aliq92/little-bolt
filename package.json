@@ -1,6 +1,6 @@
 {
   "name": "little-bolt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A mobile-first 2D platformer built with Phaser, TypeScript and Vite.",
   "type": "module",
