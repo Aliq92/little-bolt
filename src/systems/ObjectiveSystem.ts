@@ -10,7 +10,7 @@ export interface ObjectiveSystemOptions {
   onComplete: () => void;
 }
 
-const OBJECTIVE_TEXT = 'Objective: Reach the charging station.';
+const OBJECTIVE_TEXT = 'Reach the charging station. Avoid the live wire.';
 const LABEL_COLOR = '#9fd8e6';
 const LABEL_DEPTH = 500;
 

@@ -2,15 +2,17 @@ import Phaser from 'phaser';
 
 import { GAME_HEIGHT, GAME_WIDTH } from '../config/constants';
 import { ChargingStation, STATION_HEIGHT } from '../entities/objects/ChargingStation';
+import { HAZARD_HEIGHT, LiveWireHazard } from '../entities/objects/LiveWireHazard';
 import { Player } from '../entities/player/Player';
 import type { DisplayState } from '../systems/MobileDisplayController';
 import { MobileDisplayController } from '../systems/MobileDisplayController';
+import { HazardSystem } from '../systems/HazardSystem';
 import { InputController } from '../systems/InputController';
 import { ObjectiveSystem } from '../systems/ObjectiveSystem';
 import { CompletionOverlay } from '../ui/CompletionOverlay';
 import { MobilePlayOverlay } from '../ui/MobilePlayOverlay';
 
-const VERSION_LABEL = 'Little Bolt v0.2.0';
+const VERSION_LABEL = 'Little Bolt v0.3.0';
 
 const BACKGROUND_COLOR = 0x101827;
 const FLOOR_COLOR = 0x2b3346;
@@ -49,20 +51,42 @@ const STATION_PLATFORM = PLATFORMS[2];
 const STATION_X = STATION_PLATFORM.x;
 const STATION_Y = STATION_PLATFORM.y - PLATFORM_HEIGHT / 2 - STATION_HEIGHT / 2;
 
+/**
+ * The live wire sits flush on the floor in the open gap between the second and
+ * third platforms (x 400–560 and 660–820) — clear of the spawn area, clear of
+ * the station, and short enough to clear with the standard jump from either side.
+ */
+const HAZARD_X = 600;
+const HAZARD_Y = FLOOR_Y - FLOOR_HEIGHT / 2 - HAZARD_HEIGHT / 2;
+
+/** How long the player is invulnerable/frozen after touching the live wire. */
+const HAZARD_RECOVERY_DURATION_MS = 500;
+const HAZARD_SHAKE_DURATION_MS = 150;
+const HAZARD_SHAKE_INTENSITY = 0.006;
+const HAZARD_FLASH_DURATION_MS = 150;
+const HAZARD_FLICKER_STEP_MS = 60;
+const HAZARD_FLICKER_REPEATS = 3;
+
 export class MainScene extends Phaser.Scene {
   private player!: Player;
   private station!: ChargingStation;
+  private hazard!: LiveWireHazard;
   private inputController!: InputController;
   private objectiveSystem!: ObjectiveSystem;
+  private hazardSystem!: HazardSystem;
   private displayController?: MobileDisplayController;
   private overlay?: MobilePlayOverlay;
   private completionOverlay?: CompletionOverlay;
+  private hazardRecoveryTimer?: Phaser.Time.TimerEvent;
 
   /** True once gameplay is allowed to run: immediately on desktop, after the play tap on touch devices. */
   private hasStarted = true;
-  /** True while physics/input are suspended, for either orientation or objective completion. */
+  /** True while physics/input are suspended, for any reason (orientation, objective, hazard recovery). */
   private isSuspended = false;
+  /** Tracks the touch-device portrait-orientation condition independently of the other suspension reasons. */
+  private isPortraitBlocked = false;
   private objectiveCompleted = false;
+  private hazardRecoveryActive = false;
 
   public constructor() {
     super('MainScene');
@@ -71,7 +95,10 @@ export class MainScene extends Phaser.Scene {
   public create(): void {
     this.hasStarted = true;
     this.isSuspended = false;
+    this.isPortraitBlocked = false;
     this.objectiveCompleted = false;
+    this.hazardRecoveryActive = false;
+    this.hazardRecoveryTimer = undefined;
 
     this.physics.world.setBounds(0, 0, GAME_WIDTH, GAME_HEIGHT + WORLD_FALL_MARGIN);
     this.physics.world.setBoundsCollision(true, true, true, false);
@@ -82,6 +109,7 @@ export class MainScene extends Phaser.Scene {
     this.player = new Player(this);
     this.physics.add.collider(this.player, surfaces);
 
+    this.hazard = new LiveWireHazard(this, HAZARD_X, HAZARD_Y);
     this.station = new ChargingStation(this, STATION_X, STATION_Y);
 
     this.inputController = new InputController(this);
@@ -90,6 +118,7 @@ export class MainScene extends Phaser.Scene {
 
     const container = document.getElementById('game');
     this.setupObjective(container);
+    this.setupHazard();
     this.setupMobileDisplay(container);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.handleShutdown, this);
@@ -163,14 +192,71 @@ export class MainScene extends Phaser.Scene {
 
   private handleObjectiveComplete(): void {
     this.objectiveCompleted = true;
-    this.applySuspendedState(true);
+    this.recomputeSuspension();
     this.completionOverlay?.show();
   }
 
-  /** Runs from the PLAY AGAIN tap — a clean scene restart resets player, station, controls, physics, and objective state together. */
+  /** Runs from the PLAY AGAIN tap — a clean scene restart resets player, hazard, station, controls, physics, and objective state together. */
   private handlePlayAgain(): void {
     this.completionOverlay?.hide();
     this.scene.restart();
+  }
+
+  /** Wires the player/hazard overlap trigger that drives the recovery sequence. */
+  private setupHazard(): void {
+    this.hazardSystem = new HazardSystem({
+      scene: this,
+      player: this.player,
+      hazard: this.hazard,
+      onHit: () => this.handleHazardContact(),
+    });
+  }
+
+  /** Runs once per hazard contact — HazardSystem guarantees no duplicate calls while recovery is active. */
+  private handleHazardContact(): void {
+    this.hazardRecoveryActive = true;
+    this.recomputeSuspension();
+
+    const body = this.player.body as Phaser.Physics.Arcade.Body;
+    this.player.setVelocity(0, 0);
+    body.setAcceleration(0, 0);
+
+    this.playHazardFlicker();
+    this.cameras.main.shake(HAZARD_SHAKE_DURATION_MS, HAZARD_SHAKE_INTENSITY);
+    this.cameras.main.flash(HAZARD_FLASH_DURATION_MS, 34, 226, 245);
+
+    this.hazardRecoveryTimer = this.time.delayedCall(
+      HAZARD_RECOVERY_DURATION_MS,
+      () => this.endHazardRecovery(),
+      undefined,
+      this,
+    );
+  }
+
+  private playHazardFlicker(): void {
+    this.tweens.killTweensOf(this.player);
+    this.player.setAlpha(1);
+    this.tweens.add({
+      targets: this.player,
+      alpha: { from: 1, to: 0.15 },
+      duration: HAZARD_FLICKER_STEP_MS,
+      ease: 'Linear',
+      yoyo: true,
+      repeat: HAZARD_FLICKER_REPEATS,
+    });
+  }
+
+  /** Fires after the recovery delay — repositions the player, then only resumes if nothing else still requires suspension. */
+  private endHazardRecovery(): void {
+    this.hazardRecoveryTimer = undefined;
+
+    this.player.resetToSpawn();
+    this.tweens.killTweensOf(this.player);
+    this.player.setAlpha(1);
+
+    this.hazardSystem.resetGuard();
+    this.hazardRecoveryActive = false;
+    this.recomputeSuspension();
   }
 
   /**
@@ -197,7 +283,7 @@ export class MainScene extends Phaser.Scene {
       const initialState = this.displayController.getState();
       if (initialState.isTouchDevice) {
         this.hasStarted = false;
-        this.applySuspendedState(true);
+        this.recomputeSuspension();
         this.overlay.showStartOverlay();
       }
     } catch (error) {
@@ -206,10 +292,9 @@ export class MainScene extends Phaser.Scene {
       this.overlay?.destroy();
       this.displayController = undefined;
       this.overlay = undefined;
-      if (this.isSuspended) {
-        this.applySuspendedState(false);
-      }
+      this.isPortraitBlocked = false;
       this.hasStarted = true;
+      this.recomputeSuspension();
     }
   }
 
@@ -225,6 +310,8 @@ export class MainScene extends Phaser.Scene {
     this.hasStarted = true;
     if (this.displayController) {
       this.handleDisplayChange(this.displayController.getState());
+    } else {
+      this.recomputeSuspension();
     }
   }
 
@@ -241,11 +328,13 @@ export class MainScene extends Phaser.Scene {
     }
 
     const shouldPauseForOrientation = state.isTouchDevice && state.isPortrait;
+    this.isPortraitBlocked = shouldPauseForOrientation;
 
-    // The portrait guard stays authoritative even after the objective completes: physics/input
-    // remain suspended either way, and the rotate overlay renders above the completion overlay
-    // (see .lb-rotate-overlay's z-index) so landscape always reveals a valid completion state.
-    this.applySuspendedState(this.objectiveCompleted || shouldPauseForOrientation);
+    // The portrait guard stays authoritative over every other suspension reason: physics/input
+    // remain suspended regardless, and the rotate overlay renders above the completion overlay
+    // (see .lb-rotate-overlay's z-index) so landscape always reveals a valid completion or
+    // recovery state once it's safe to.
+    this.recomputeSuspension();
 
     if (shouldPauseForOrientation) {
       this.overlay?.showRotateOverlay();
@@ -261,7 +350,18 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  /** Single idempotent chokepoint for pausing/resuming physics + input, whatever the reason. */
+  /**
+   * Single source of truth for every reason gameplay might be suspended: not started yet,
+   * blocked by portrait orientation, the objective is complete, or hazard recovery is active.
+   * Input/movement are only ever enabled when none of these are true.
+   */
+  private recomputeSuspension(): void {
+    const shouldSuspend =
+      !this.hasStarted || this.isPortraitBlocked || this.objectiveCompleted || this.hazardRecoveryActive;
+    this.applySuspendedState(shouldSuspend);
+  }
+
+  /** Idempotent chokepoint for actually pausing/resuming physics + input. */
   private applySuspendedState(shouldSuspend: boolean): void {
     if (shouldSuspend === this.isSuspended) {
       return;
@@ -277,6 +377,8 @@ export class MainScene extends Phaser.Scene {
   }
 
   private handleShutdown(): void {
+    this.hazardRecoveryTimer?.remove();
+    this.hazardSystem?.destroy();
     this.inputController?.destroy();
     this.displayController?.destroy();
     this.overlay?.destroy();
